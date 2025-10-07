@@ -819,6 +819,17 @@ elif page == "📤 Import/Export":
     with tab1:
         st.subheader("Importer des données depuis Excel")
         
+        st.info("""
+        💡 **Import automatique intelligent**
+        
+        L'application détecte automatiquement les colonnes de vos feuilles Excel :
+        - **Facturation-Certif** : Import automatique des facturations certification
+        - **Facturation-Autres** : Import automatique des autres prestations
+        - **FRAIS DIVERS** : Import automatique des charges diverses
+        
+        Téléchargez simplement votre fichier !
+        """)
+        
         uploaded_file = st.file_uploader(
             "Choisir un fichier Excel", 
             type=['xlsx', 'xls', 'xlsm']
@@ -829,31 +840,553 @@ elif page == "📤 Import/Export":
                 # Lecture du fichier
                 excel_file = pd.ExcelFile(uploaded_file)
                 st.success(f"✅ Fichier chargé: {uploaded_file.name}")
+                st.write("**Feuilles disponibles:**", ", ".join(excel_file.sheet_names))
                 
-                # Sélection de la feuille
-                sheet_name = st.selectbox("Sélectionner une feuille", excel_file.sheet_names)
+                # Fonction pour détecter et mapper les colonnes automatiquement
+                def detect_column(df_columns, possible_names):
+                    """Détecte une colonne en cherchant des noms possibles"""
+                    df_columns_lower = [str(col).lower().strip() for col in df_columns]
+                    for name in possible_names:
+                        name_lower = name.lower().strip()
+                        for i, col in enumerate(df_columns_lower):
+                            if name_lower in col or col in name_lower:
+                                return df_columns[i]
+                    return None
                 
-                if sheet_name:
-                    df = pd.read_excel(excel_file, sheet_name=sheet_name)
-                    st.dataframe(df.head(20), use_container_width=True)
-                    
-                    st.info("""
-                    💡 **Instructions pour l'import automatique**:
-                    
-                    Pour importer vos données, assurez-vous que votre fichier Excel contient:
-                    
-                    **Pour la facturation certification:**
-                    - Date, Client, Référentiel, Durée, Montant, Frais Mission, Coût Auditeur, Statut
-                    
-                    **Pour la facturation autres:**
-                    - Date, Type, Client, Description, Montant, Frais Mission, Coût Auditeur, Statut
-                    
-                    **Pour les charges:**
-                    - Date, Catégorie, Description, Montant, Statut
-                    """)
+                # Fonction pour nettoyer et convertir les données
+                def clean_data(df, start_row=2):
+                    """Nettoie les données en supprimant les lignes vides"""
+                    if start_row > 0:
+                        df = df.iloc[start_row:]
+                    df = df.dropna(how='all')
+                    return df.reset_index(drop=True)
+                
+                # ========================================
+                # IMPORT AUTOMATIQUE FACTURATION CERTIFICATION
+                # ========================================
+                if 'Facturation-Certif' in excel_file.sheet_names:
+                    with st.expander("🔷 Facturation Certification - Import Automatique", expanded=True):
+                        try:
+                            df_certif_raw = pd.read_excel(excel_file, sheet_name='Facturation-Certif')
+                            
+                            st.write(f"📊 Aperçu des données brutes ({len(df_certif_raw)} lignes):")
+                            st.dataframe(df_certif_raw.head(5), use_container_width=True)
+                            
+                            # Paramètres d'import
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                start_row_certif = st.number_input(
+                                    "Ligne de départ (0 = première ligne)", 
+                                    min_value=0, 
+                                    max_value=max(0, len(df_certif_raw)-1), 
+                                    value=2,
+                                    key="auto_certif_start"
+                                )
+                            with col2:
+                                replace_certif = st.checkbox(
+                                    "Remplacer les données existantes", 
+                                    value=True,
+                                    key="auto_certif_replace"
+                                )
+                            
+                            # Détection automatique des colonnes
+                            df_certif = clean_data(df_certif_raw, start_row_certif)
+                            columns = df_certif.columns.tolist()
+                            
+                            date_col = detect_column(columns, ['date', 'DATE', 'Date audit', 'Date d\'audit'])
+                            client_col = detect_column(columns, ['client', 'CLIENT', 'nom', 'société', 'entreprise'])
+                            ref_col = detect_column(columns, ['référentiel', 'referentiel', 'programme', 'norme', 'standard'])
+                            duree_col = detect_column(columns, ['durée', 'duree', 'jours', 'jour', 'temps'])
+                            montant_col = detect_column(columns, ['montant', 'CA', 'chiffre', 'facturation', 'prix', 'tarif'])
+                            frais_col = detect_column(columns, ['frais', 'mission', 'déplacement', 'deplacement', 'km'])
+                            cout_col = detect_column(columns, ['coût', 'cout', 'auditeur', 'honoraire', 'vacation'])
+                            statut_col = detect_column(columns, ['statut', 'état', 'etat', 'status'])
+                            
+                            # Afficher les colonnes détectées
+                            st.write("**🔍 Colonnes détectées automatiquement:**")
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.write(f"📅 Date: `{date_col}`")
+                                st.write(f"👤 Client: `{client_col}`")
+                            with col2:
+                                st.write(f"📋 Référentiel: `{ref_col}`")
+                                st.write(f"⏱️ Durée: `{duree_col}`")
+                            with col3:
+                                st.write(f"💰 Montant: `{montant_col}`")
+                                st.write(f"🚗 Frais: `{frais_col}`")
+                            with col4:
+                                st.write(f"👨‍💼 Coût Aud.: `{cout_col}`")
+                                st.write(f"✅ Statut: `{statut_col}`")
+                            
+                            if st.button("✨ Importer automatiquement Certification", key="auto_import_certif", type="primary"):
+                                if date_col and client_col and montant_col:
+                                    try:
+                                        new_data = pd.DataFrame()
+                                        new_data['Date'] = pd.to_datetime(df_certif[date_col], errors='coerce')
+                                        new_data['Client'] = df_certif[client_col].astype(str)
+                                        new_data['Référentiel'] = df_certif[ref_col].astype(str) if ref_col else 'N/A'
+                                        new_data['Durée'] = pd.to_numeric(df_certif[duree_col], errors='coerce') if duree_col else 1.0
+                                        new_data['Montant_Facturation'] = pd.to_numeric(df_certif[montant_col], errors='coerce')
+                                        new_data['Frais_Mission'] = pd.to_numeric(df_certif[frais_col], errors='coerce') if frais_col else 0
+                                        new_data['Cout_Auditeur'] = pd.to_numeric(df_certif[cout_col], errors='coerce') if cout_col else 0
+                                        new_data['Statut'] = df_certif[statut_col].astype(str) if statut_col else 'Facturé'
+                                        
+                                        # Nettoyer
+                                        new_data = new_data.dropna(subset=['Date'])
+                                        new_data = new_data[new_data['Client'].str.strip() != '']
+                                        new_data = new_data[new_data['Montant_Facturation'].notna()]
+                                        new_data = new_data[new_data['Montant_Facturation'] > 0]
+                                        new_data = new_data.fillna(0)
+                                        
+                                        # Remplacer ou ajouter
+                                        if replace_certif:
+                                            st.session_state.facturation_certif = new_data.reset_index(drop=True)
+                                        else:
+                                            st.session_state.facturation_certif = pd.concat(
+                                                [st.session_state.facturation_certif, new_data], 
+                                                ignore_index=True
+                                            )
+                                        
+                                        st.success(f"✅ {len(new_data)} lignes de Certification importées avec succès!")
+                                        st.balloons()
+                                        st.rerun()
+                                        
+                                    except Exception as e:
+                                        st.error(f"❌ Erreur lors de l'import: {str(e)}")
+                                        st.write("Détails:", e)
+                                else:
+                                    st.error("❌ Impossible de détecter les colonnes essentielles (Date, Client, Montant)")
+                                    
+                        except Exception as e:
+                            st.error(f"❌ Erreur lors de la lecture de la feuille Certification: {str(e)}")
+                
+                # ========================================
+                # IMPORT AUTOMATIQUE FACTURATION AUTRES
+                # ========================================
+                if 'Facturation-Autres' in excel_file.sheet_names:
+                    with st.expander("🔶 Facturation Autres - Import Automatique", expanded=True):
+                        try:
+                            df_autres_raw = pd.read_excel(excel_file, sheet_name='Facturation-Autres')
+                            
+                            st.write(f"📊 Aperçu des données brutes ({len(df_autres_raw)} lignes):")
+                            st.dataframe(df_autres_raw.head(5), use_container_width=True)
+                            
+                            # Paramètres d'import
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                start_row_autres = st.number_input(
+                                    "Ligne de départ (0 = première ligne)", 
+                                    min_value=0, 
+                                    max_value=max(0, len(df_autres_raw)-1), 
+                                    value=2,
+                                    key="auto_autres_start"
+                                )
+                            with col2:
+                                replace_autres = st.checkbox(
+                                    "Remplacer les données existantes", 
+                                    value=True,
+                                    key="auto_autres_replace"
+                                )
+                            
+                            # Détection automatique
+                            df_autres = clean_data(df_autres_raw, start_row_autres)
+                            columns = df_autres.columns.tolist()
+                            
+                            date_col = detect_column(columns, ['date', 'DATE'])
+                            type_col = detect_column(columns, ['type', 'prestation', 'catégorie', 'categorie'])
+                            client_col = detect_column(columns, ['client', 'CLIENT', 'nom', 'société'])
+                            desc_col = detect_column(columns, ['description', 'libellé', 'libelle', 'objet', 'commentaire'])
+                            montant_col = detect_column(columns, ['montant', 'CA', 'chiffre', 'facturation', 'prix'])
+                            frais_col = detect_column(columns, ['frais', 'mission', 'déplacement'])
+                            cout_col = detect_column(columns, ['coût', 'cout', 'auditeur', 'prestataire', 'honoraire'])
+                            statut_col = detect_column(columns, ['statut', 'état', 'status'])
+                            
+                            # Afficher les colonnes détectées
+                            st.write("**🔍 Colonnes détectées automatiquement:**")
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.write(f"📅 Date: `{date_col}`")
+                                st.write(f"📦 Type: `{type_col}`")
+                            with col2:
+                                st.write(f"👤 Client: `{client_col}`")
+                                st.write(f"📝 Description: `{desc_col}`")
+                            with col3:
+                                st.write(f"💰 Montant: `{montant_col}`")
+                                st.write(f"🚗 Frais: `{frais_col}`")
+                            with col4:
+                                st.write(f"👨‍💼 Coût: `{cout_col}`")
+                                st.write(f"✅ Statut: `{statut_col}`")
+                            
+                            if st.button("✨ Importer automatiquement Autres", key="auto_import_autres", type="primary"):
+                                if date_col and client_col and montant_col:
+                                    try:
+                                        new_data = pd.DataFrame()
+                                        new_data['Date'] = pd.to_datetime(df_autres[date_col], errors='coerce')
+                                        new_data['Type'] = df_autres[type_col].astype(str) if type_col else 'Autre'
+                                        new_data['Client'] = df_autres[client_col].astype(str)
+                                        new_data['Description'] = df_autres[desc_col].astype(str) if desc_col else ''
+                                        new_data['Montant_Facturation'] = pd.to_numeric(df_autres[montant_col], errors='coerce')
+                                        new_data['Frais_Mission'] = pd.to_numeric(df_autres[frais_col], errors='coerce') if frais_col else 0
+                                        new_data['Cout_Auditeur'] = pd.to_numeric(df_autres[cout_col], errors='coerce') if cout_col else 0
+                                        new_data['Statut'] = df_autres[statut_col].astype(str) if statut_col else 'Facturé'
+                                        
+                                        # Nettoyer
+                                        new_data = new_data.dropna(subset=['Date'])
+                                        new_data = new_data[new_data['Client'].str.strip() != '']
+                                        new_data = new_data[new_data['Montant_Facturation'].notna()]
+                                        new_data = new_data[new_data['Montant_Facturation'] > 0]
+                                        new_data = new_data.fillna(0)
+                                        
+                                        # Remplacer ou ajouter
+                                        if replace_autres:
+                                            st.session_state.facturation_autres = new_data.reset_index(drop=True)
+                                        else:
+                                            st.session_state.facturation_autres = pd.concat(
+                                                [st.session_state.facturation_autres, new_data], 
+                                                ignore_index=True
+                                            )
+                                        
+                                        st.success(f"✅ {len(new_data)} lignes de Facturation Autres importées avec succès!")
+                                        st.balloons()
+                                        st.rerun()
+                                        
+                                    except Exception as e:
+                                        st.error(f"❌ Erreur lors de l'import: {str(e)}")
+                                        st.write("Détails:", e)
+                                else:
+                                    st.error("❌ Impossible de détecter les colonnes essentielles (Date, Client, Montant)")
+                                    
+                        except Exception as e:
+                            st.error(f"❌ Erreur lors de la lecture de la feuille Autres: {str(e)}")
+                
+                # ========================================
+                # IMPORT AUTOMATIQUE CHARGES DIVERSES
+                # ========================================
+                if 'FRAIS DIVERS' in excel_file.sheet_names:
+                    with st.expander("💸 Charges Diverses - Import Automatique"):
+                        try:
+                            df_charges_raw = pd.read_excel(excel_file, sheet_name='FRAIS DIVERS')
+                            
+                            st.write(f"📊 Aperçu des données brutes ({len(df_charges_raw)} lignes):")
+                            st.dataframe(df_charges_raw.head(5), use_container_width=True)
+                            
+                            # Paramètres d'import
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                start_row_charges = st.number_input(
+                                    "Ligne de départ (0 = première ligne)", 
+                                    min_value=0, 
+                                    max_value=max(0, len(df_charges_raw)-1), 
+                                    value=1,
+                                    key="auto_charges_start"
+                                )
+                            with col2:
+                                replace_charges = st.checkbox(
+                                    "Remplacer les données existantes", 
+                                    value=True,
+                                    key="auto_charges_replace"
+                                )
+                            
+                            # Détection automatique
+                            df_charges = clean_data(df_charges_raw, start_row_charges)
+                            columns = df_charges.columns.tolist()
+                            
+                            date_col = detect_column(columns, ['date', 'DATE'])
+                            cat_col = detect_column(columns, ['catégorie', 'categorie', 'type', 'nature'])
+                            desc_col = detect_column(columns, ['description', 'libellé', 'libelle', 'objet'])
+                            montant_col = detect_column(columns, ['montant', 'coût', 'cout', 'prix', 'charge'])
+                            statut_col = detect_column(columns, ['statut', 'état', 'status', 'payé', 'paye'])
+                            
+                            # Afficher les colonnes détectées
+                            st.write("**🔍 Colonnes détectées automatiquement:**")
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.write(f"📅 Date: `{date_col}`")
+                                st.write(f"📦 Catégorie: `{cat_col}`")
+                            with col2:
+                                st.write(f"📝 Description: `{desc_col}`")
+                                st.write(f"💰 Montant: `{montant_col}`")
+                            with col3:
+                                st.write(f"✅ Statut: `{statut_col}`")
+                            
+                            if st.button("✨ Importer automatiquement Charges", key="auto_import_charges", type="primary"):
+                                if date_col and montant_col:
+                                    try:
+                                        new_data = pd.DataFrame()
+                                        new_data['Date'] = pd.to_datetime(df_charges[date_col], errors='coerce')
+                                        new_data['Catégorie'] = df_charges[cat_col].astype(str) if cat_col else 'Autre'
+                                        new_data['Description'] = df_charges[desc_col].astype(str) if desc_col else ''
+                                        new_data['Montant'] = pd.to_numeric(df_charges[montant_col], errors='coerce')
+                                        new_data['Statut'] = df_charges[statut_col].astype(str) if statut_col else 'Payé'
+                                        
+                                        # Nettoyer
+                                        new_data = new_data.dropna(subset=['Date', 'Montant'])
+                                        new_data = new_data[new_data['Montant'] > 0]
+                                        new_data = new_data.fillna('')
+                                        
+                                        # Remplacer ou ajouter
+                                        if replace_charges:
+                                            st.session_state.charges_diverses = new_data.reset_index(drop=True)
+                                        else:
+                                            st.session_state.charges_diverses = pd.concat(
+                                                [st.session_state.charges_diverses, new_data], 
+                                                ignore_index=True
+                                            )
+                                        
+                                        st.success(f"✅ {len(new_data)} lignes de Charges importées avec succès!")
+                                        st.balloons()
+                                        st.rerun()
+                                        
+                                    except Exception as e:
+                                        st.error(f"❌ Erreur lors de l'import: {str(e)}")
+                                        st.write("Détails:", e)
+                                else:
+                                    st.error("❌ Impossible de détecter les colonnes essentielles (Date, Montant)")
+                                    
+                        except Exception as e:
+                            st.error(f"❌ Erreur lors de la lecture de la feuille Charges: {str(e)}")
+                
+                # Message si aucune feuille reconnue
+                if not any(sheet in excel_file.sheet_names for sheet in ['Facturation-Certif', 'Facturation-Autres', 'FRAIS DIVERS']):
+                    st.warning("⚠️ Aucune feuille standard détectée. Assurez-vous que votre fichier contient les feuilles: 'Facturation-Certif', 'Facturation-Autres' ou 'FRAIS DIVERS'")
                     
             except Exception as e:
                 st.error(f"❌ Erreur lors de la lecture du fichier: {str(e)}")
+                st.write("Détails de l'erreur:", e)
+            try:
+                # Lecture du fichier
+                excel_file = pd.ExcelFile(uploaded_file)
+                st.success(f"✅ Fichier chargé: {uploaded_file.name}")
+                
+                st.write("**Feuilles disponibles:**", excel_file.sheet_names)
+                
+                # Section Import Facturation Certification
+                with st.expander("📋 Importer Facturation Certification", expanded=True):
+                    st.write("**Sélectionner la feuille contenant les facturations certification**")
+                    
+                    certif_sheet = st.selectbox(
+                        "Feuille Certification", 
+                        excel_file.sheet_names,
+                        key="certif_sheet"
+                    )
+                    
+                    if certif_sheet:
+                        df_certif = pd.read_excel(excel_file, sheet_name=certif_sheet)
+                        st.write(f"Aperçu ({len(df_certif)} lignes):")
+                        st.dataframe(df_certif.head(10), use_container_width=True)
+                        
+                        st.write("**Mapper les colonnes:**")
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            date_col = st.selectbox("Colonne Date", [''] + list(df_certif.columns), key="certif_date")
+                            client_col = st.selectbox("Colonne Client", [''] + list(df_certif.columns), key="certif_client")
+                            ref_col = st.selectbox("Colonne Référentiel", [''] + list(df_certif.columns), key="certif_ref")
+                        
+                        with col2:
+                            duree_col = st.selectbox("Colonne Durée", [''] + list(df_certif.columns), key="certif_duree")
+                            montant_col = st.selectbox("Colonne Montant Facturation", [''] + list(df_certif.columns), key="certif_montant")
+                            frais_col = st.selectbox("Colonne Frais Mission", [''] + list(df_certif.columns), key="certif_frais")
+                        
+                        with col3:
+                            cout_col = st.selectbox("Colonne Coût Auditeur", [''] + list(df_certif.columns), key="certif_cout")
+                            statut_col = st.selectbox("Colonne Statut (optionnel)", [''] + list(df_certif.columns), key="certif_statut")
+                        
+                        # Ligne de départ
+                        start_row = st.number_input("Ligne de départ (0 = première ligne)", 
+                                                   min_value=0, 
+                                                   max_value=len(df_certif)-1, 
+                                                   value=2,
+                                                   key="certif_start")
+                        
+                        if st.button("✅ Importer les données Certification", key="import_certif"):
+                            if all([date_col, client_col, montant_col]):
+                                try:
+                                    # Créer le nouveau dataframe
+                                    new_data = pd.DataFrame()
+                                    new_data['Date'] = pd.to_datetime(df_certif[date_col].iloc[start_row:], errors='coerce')
+                                    new_data['Client'] = df_certif[client_col].iloc[start_row:]
+                                    new_data['Référentiel'] = df_certif[ref_col].iloc[start_row:] if ref_col else ''
+                                    new_data['Durée'] = pd.to_numeric(df_certif[duree_col].iloc[start_row:], errors='coerce') if duree_col else 1.0
+                                    new_data['Montant_Facturation'] = pd.to_numeric(df_certif[montant_col].iloc[start_row:], errors='coerce')
+                                    new_data['Frais_Mission'] = pd.to_numeric(df_certif[frais_col].iloc[start_row:], errors='coerce') if frais_col else 0
+                                    new_data['Cout_Auditeur'] = pd.to_numeric(df_certif[cout_col].iloc[start_row:], errors='coerce') if cout_col else 0
+                                    new_data['Statut'] = df_certif[statut_col].iloc[start_row:] if statut_col else 'Facturé'
+                                    
+                                    # Nettoyer les lignes vides
+                                    new_data = new_data.dropna(subset=['Date', 'Client', 'Montant_Facturation'])
+                                    new_data = new_data[new_data['Montant_Facturation'] > 0]
+                                    new_data = new_data.fillna(0)
+                                    
+                                    # Remplacer ou ajouter
+                                    replace_option = st.radio("Options d'import:", 
+                                                             ["Remplacer les données existantes", "Ajouter aux données existantes"],
+                                                             key="certif_replace")
+                                    
+                                    if replace_option == "Remplacer les données existantes":
+                                        st.session_state.facturation_certif = new_data.reset_index(drop=True)
+                                    else:
+                                        st.session_state.facturation_certif = pd.concat(
+                                            [st.session_state.facturation_certif, new_data], 
+                                            ignore_index=True
+                                        )
+                                    
+                                    st.success(f"✅ {len(new_data)} lignes importées avec succès!")
+                                    st.balloons()
+                                    st.rerun()
+                                    
+                                except Exception as e:
+                                    st.error(f"❌ Erreur lors de l'import: {str(e)}")
+                            else:
+                                st.warning("⚠️ Veuillez sélectionner au minimum: Date, Client et Montant")
+                
+                # Section Import Facturation Autres
+                with st.expander("📋 Importer Facturation Autres"):
+                    st.write("**Sélectionner la feuille contenant les autres facturations**")
+                    
+                    autres_sheet = st.selectbox(
+                        "Feuille Autres", 
+                        excel_file.sheet_names,
+                        key="autres_sheet"
+                    )
+                    
+                    if autres_sheet:
+                        df_autres = pd.read_excel(excel_file, sheet_name=autres_sheet)
+                        st.write(f"Aperçu ({len(df_autres)} lignes):")
+                        st.dataframe(df_autres.head(10), use_container_width=True)
+                        
+                        st.write("**Mapper les colonnes:**")
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            date_col_a = st.selectbox("Colonne Date", [''] + list(df_autres.columns), key="autres_date")
+                            type_col = st.selectbox("Colonne Type", [''] + list(df_autres.columns), key="autres_type")
+                            client_col_a = st.selectbox("Colonne Client", [''] + list(df_autres.columns), key="autres_client")
+                        
+                        with col2:
+                            desc_col = st.selectbox("Colonne Description", [''] + list(df_autres.columns), key="autres_desc")
+                            montant_col_a = st.selectbox("Colonne Montant", [''] + list(df_autres.columns), key="autres_montant")
+                            frais_col_a = st.selectbox("Colonne Frais Mission", [''] + list(df_autres.columns), key="autres_frais")
+                        
+                        with col3:
+                            cout_col_a = st.selectbox("Colonne Coût Auditeur", [''] + list(df_autres.columns), key="autres_cout")
+                            statut_col_a = st.selectbox("Colonne Statut (optionnel)", [''] + list(df_autres.columns), key="autres_statut")
+                        
+                        start_row_a = st.number_input("Ligne de départ", 
+                                                     min_value=0, 
+                                                     max_value=len(df_autres)-1, 
+                                                     value=2,
+                                                     key="autres_start")
+                        
+                        if st.button("✅ Importer les données Autres", key="import_autres"):
+                            if all([date_col_a, client_col_a, montant_col_a]):
+                                try:
+                                    new_data = pd.DataFrame()
+                                    new_data['Date'] = pd.to_datetime(df_autres[date_col_a].iloc[start_row_a:], errors='coerce')
+                                    new_data['Type'] = df_autres[type_col].iloc[start_row_a:] if type_col else 'Autre'
+                                    new_data['Client'] = df_autres[client_col_a].iloc[start_row_a:]
+                                    new_data['Description'] = df_autres[desc_col].iloc[start_row_a:] if desc_col else ''
+                                    new_data['Montant_Facturation'] = pd.to_numeric(df_autres[montant_col_a].iloc[start_row_a:], errors='coerce')
+                                    new_data['Frais_Mission'] = pd.to_numeric(df_autres[frais_col_a].iloc[start_row_a:], errors='coerce') if frais_col_a else 0
+                                    new_data['Cout_Auditeur'] = pd.to_numeric(df_autres[cout_col_a].iloc[start_row_a:], errors='coerce') if cout_col_a else 0
+                                    new_data['Statut'] = df_autres[statut_col_a].iloc[start_row_a:] if statut_col_a else 'Facturé'
+                                    
+                                    new_data = new_data.dropna(subset=['Date', 'Client', 'Montant_Facturation'])
+                                    new_data = new_data[new_data['Montant_Facturation'] > 0]
+                                    new_data = new_data.fillna(0)
+                                    
+                                    replace_option = st.radio("Options d'import:", 
+                                                             ["Remplacer les données existantes", "Ajouter aux données existantes"],
+                                                             key="autres_replace")
+                                    
+                                    if replace_option == "Remplacer les données existantes":
+                                        st.session_state.facturation_autres = new_data.reset_index(drop=True)
+                                    else:
+                                        st.session_state.facturation_autres = pd.concat(
+                                            [st.session_state.facturation_autres, new_data], 
+                                            ignore_index=True
+                                        )
+                                    
+                                    st.success(f"✅ {len(new_data)} lignes importées avec succès!")
+                                    st.balloons()
+                                    st.rerun()
+                                    
+                                except Exception as e:
+                                    st.error(f"❌ Erreur lors de l'import: {str(e)}")
+                            else:
+                                st.warning("⚠️ Veuillez sélectionner au minimum: Date, Client et Montant")
+                
+                # Section Import Charges
+                with st.expander("📋 Importer Charges Diverses"):
+                    st.write("**Sélectionner la feuille contenant les charges diverses**")
+                    
+                    charges_sheet = st.selectbox(
+                        "Feuille Charges", 
+                        excel_file.sheet_names,
+                        key="charges_sheet"
+                    )
+                    
+                    if charges_sheet:
+                        df_charges = pd.read_excel(excel_file, sheet_name=charges_sheet)
+                        st.write(f"Aperçu ({len(df_charges)} lignes):")
+                        st.dataframe(df_charges.head(10), use_container_width=True)
+                        
+                        st.write("**Mapper les colonnes:**")
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            date_col_c = st.selectbox("Colonne Date", [''] + list(df_charges.columns), key="charges_date")
+                            cat_col = st.selectbox("Colonne Catégorie", [''] + list(df_charges.columns), key="charges_cat")
+                            desc_col_c = st.selectbox("Colonne Description", [''] + list(df_charges.columns), key="charges_desc")
+                        
+                        with col2:
+                            montant_col_c = st.selectbox("Colonne Montant", [''] + list(df_charges.columns), key="charges_montant")
+                            statut_col_c = st.selectbox("Colonne Statut (optionnel)", [''] + list(df_charges.columns), key="charges_statut")
+                        
+                        start_row_c = st.number_input("Ligne de départ", 
+                                                     min_value=0, 
+                                                     max_value=len(df_charges)-1, 
+                                                     value=1,
+                                                     key="charges_start")
+                        
+                        if st.button("✅ Importer les Charges", key="import_charges"):
+                            if all([date_col_c, montant_col_c]):
+                                try:
+                                    new_data = pd.DataFrame()
+                                    new_data['Date'] = pd.to_datetime(df_charges[date_col_c].iloc[start_row_c:], errors='coerce')
+                                    new_data['Catégorie'] = df_charges[cat_col].iloc[start_row_c:] if cat_col else 'Autre'
+                                    new_data['Description'] = df_charges[desc_col_c].iloc[start_row_c:] if desc_col_c else ''
+                                    new_data['Montant'] = pd.to_numeric(df_charges[montant_col_c].iloc[start_row_c:], errors='coerce')
+                                    new_data['Statut'] = df_charges[statut_col_c].iloc[start_row_c:] if statut_col_c else 'Payé'
+                                    
+                                    new_data = new_data.dropna(subset=['Date', 'Montant'])
+                                    new_data = new_data[new_data['Montant'] > 0]
+                                    new_data = new_data.fillna('')
+                                    
+                                    replace_option = st.radio("Options d'import:", 
+                                                             ["Remplacer les données existantes", "Ajouter aux données existantes"],
+                                                             key="charges_replace")
+                                    
+                                    if replace_option == "Remplacer les données existantes":
+                                        st.session_state.charges_diverses = new_data.reset_index(drop=True)
+                                    else:
+                                        st.session_state.charges_diverses = pd.concat(
+                                            [st.session_state.charges_diverses, new_data], 
+                                            ignore_index=True
+                                        )
+                                    
+                                    st.success(f"✅ {len(new_data)} lignes importées avec succès!")
+                                    st.balloons()
+                                    st.rerun()
+                                    
+                                except Exception as e:
+                                    st.error(f"❌ Erreur lors de l'import: {str(e)}")
+                            else:
+                                st.warning("⚠️ Veuillez sélectionner au minimum: Date et Montant")
+                    
+            except Exception as e:
+                st.error(f"❌ Erreur lors de la lecture du fichier: {str(e)}")
+                st.write("Détails de l'erreur:", e)
     
     with tab2:
         st.subheader("Exporter les données")
